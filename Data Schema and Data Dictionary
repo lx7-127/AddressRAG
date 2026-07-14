@@ -1,0 +1,155 @@
+# AddressRAG Dataset Schema and Data Dictionary
+
+Version: 1.0.0  
+
+Repository: https://github.com/lx7-127/AddressRAG
+
+## 1. Scope and Availability
+
+This document describes the structure of the toponym-address corpus used in the AddressRAG experiments. The experimental corpus contains 3,000 records, with one toponym-address or point-of-interest (POI) record per row.
+
+The source records were obtained from Amap and remain subject to the applicable data license and terms of use. Therefore, this release does not contain raw place names, administrative names, detailed addresses, coordinates, platform identifiers, source records, or other traceable values. Only the schema, field definitions, aggregate completeness counts, controlled-value definitions, and anonymization rules are provided.
+
+The authors should specify a separate license for this documentation and the released code. That license does not supersede the terms applicable to the original Amap data.
+
+## 2. Dataset-Level Schema
+
+| Property | Definition |
+|---|---|
+| Logical dataset name | `toponym_address_corpus` |
+| Unit of observation | One selected toponym-address or POI record |
+| Primary key | `sample_id` |
+| Experimental record count | 3,000 |
+| Number of fields | 21 |
+| Geographic design | Two-city cross-city corpus; public artifacts use `CITY_A` and `CITY_B` |
+| Sampling design | Deterministic stratified sampling by city code and source POI category |
+| Source POI strata | `catering_service`, `scenic_spot`, `public_facility`, `life_service` |
+| Coordinate reference system | WGS84 geographic coordinates (`EPSG:4326`) |
+| Coordinate unit | Decimal degrees |
+| Text encoding | UTF-8 when exported to a text-based format |
+| Sampling seed | `20260608` |
+| STA generation | Deterministic rule- and template-based transformation, not free-form LLM generation |
+| Public release | Schema and documentation only; licensed record-level values are not redistributed |
+
+## 3. Field Groups
+
+| Field group | Fields | Source class | Main role | Public treatment |
+|---|---|---|---|---|
+| Record identity | `sample_id` | Derived | Stable join key for sampling and evaluation | Release a newly generated public ID |
+| Toponym and address | `place_name`, `province`, `city`, `district`, `detailed_address` | Licensed source or parsed | Entity identity and administrative containment | Replace with stable pseudonyms |
+| Spatial coordinates | `longitude`, `latitude` | Licensed source | Spatial attributes and coordinate questions | Remove or redact |
+| POI classification | `poi_type`, `category_level_1` to `category_level_5` | Licensed source plus deterministic parsing | Classification mapping and KG attributes | Release only coarse public classes or pseudonymous codes |
+| Task annotations | `administrative_granularity`, `query_difficulty`, `sampling_stratum` | Deterministic derived | Stratification and subgroup analysis | Release normalized codes |
+| Semantic augmentation | `semantic_text` | Deterministic derived | STA output used for KG construction | Regenerate from anonymized fields |
+| Provenance | `source_file`, `source_sheet` | Ingestion metadata | Internal audit trail | Replace with generic source codes or remove |
+| Reproducibility | `selected_random_seed` | Fixed parameter | Deterministic sampling | Release unchanged |
+
+## 4. Data Dictionary
+
+`Missing count` reports aggregate completeness statistics for the 3,000-record experimental corpus. The examples below are fully synthetic and do not correspond to real Amap records.
+
+| No. | Field name | Data type | Required | Nullable | Source class | Definition | Constraint or allowed values | Missing count | Anonymized example | Pipeline use | Public handling |
+|---:|---|---|---|---|---|---|---|---:|---|---|---|
+| 1 | `sample_id` | String | Yes | No | Derived | Unique record identifier assigned after sampling. | Unique; recommended public pattern: `^REC_[0-9]{6}$` | 0 | `REC_000001` | Sampling, QA linkage, audit | Generate a new public ID; do not hash a platform identifier directly |
+| 2 | `place_name` | String | Yes | No | Licensed source | Original toponym or POI name. | Non-empty source string | 0 | `POI_A` | Entity extraction, entity linking, retrieval | Replace with a stable POI code |
+| 3 | `province` | String | Yes | No | Licensed source or parsed | Province-level administrative affiliation. | Valid administrative name in the source corpus | 0 | `PROV_A` | Administrative hierarchy | Replace with a stable province code |
+| 4 | `city` | String | Yes | No | Licensed source or parsed | City-level administrative affiliation and top-level sampling stratum. | Valid study-city value | 0 | `CITY_A` | Cross-city sampling and hierarchy | Replace with `CITY_A` or `CITY_B` |
+| 5 | `district` | String | Yes | No | Licensed source or parsed | District- or county-level administrative affiliation. | Valid district or county value | 0 | `DIST_A` | Administrative hierarchy and disambiguation | Replace with a stable district code |
+| 6 | `detailed_address` | String | No | Yes | Licensed source | Street-, township-, community-, building-, or landmark-level address description. | Free text or null | 148 | `ADDRESS_A` | Fine-grained retrieval and QA construction | Replace with an address code or null |
+| 7 | `longitude` | Number | Yes | No | Licensed source | Longitude of the source record. | WGS84; `-180 <= longitude <= 180` | 0 | `[REDACTED]` | Coordinate attributes and coordinate questions | Remove or redact |
+| 8 | `latitude` | Number | Yes | No | Licensed source | Latitude of the source record. | WGS84; `-90 <= latitude <= 90` | 0 | `[REDACTED]` | Coordinate attributes and coordinate questions | Remove or redact |
+| 9 | `poi_type` | String | Yes | No | Licensed source | Original or normalized POI classification path. | One or more labels, commonly separated by `|` | 0 | `CATEGORY_PATH_A` | Classification mapping and KG attributes | Release the schema but replace record-level values |
+| 10 | `category_level_1` | String | Yes | No | Deterministic parsed | First parsed level of `poi_type`. It may differ from the four source-file sampling categories. | Source taxonomy label | 0 | `CAT_L1_A` | Category analysis and KG attributes | Replace with a code or retain only a coarse public class |
+| 11 | `category_level_2` | String | Yes | No | Deterministic parsed | Second parsed level of `poi_type`. | Source taxonomy label | 0 | `CAT_L2_A` | Category analysis and KG attributes | Replace with a code |
+| 12 | `category_level_3` | String | Yes | No | Deterministic parsed | Third parsed level of `poi_type`. | Source taxonomy label | 0 | `CAT_L3_A` | Category analysis and KG attributes | Replace with a code |
+| 13 | `category_level_4` | String | No | Yes | Deterministic parsed | Fourth parsed level of `poi_type`, when present. | Source taxonomy label or null | 2,993 | `null` | Optional category detail | Replace with a code or null |
+| 14 | `category_level_5` | String | No | Yes | Deterministic parsed | Fifth parsed level of `poi_type`, when present. | Source taxonomy label or null | 2,993 | `null` | Optional category detail | Replace with a code or null |
+| 15 | `administrative_granularity` | String | Yes | No | Deterministic derived | Most specific spatial or address granularity inferred from the available fields. | See Section 5 | 0 | `road_or_street` | Stratification and difficulty analysis | Release a normalized code |
+| 16 | `query_difficulty` | String | Yes | No | Deterministic derived | Expected retrieval challenge assigned using record completeness, ambiguity, and spatial-reasoning rules. | See Section 5 | 0 | `spatial_reasoning_query` | Stratification and subgroup analysis | Release a normalized code |
+| 17 | `sampling_stratum` | String | Yes | No | Deterministic derived | Composite stratum used for deterministic proportional sampling. | `<city_code> / <source_category>` | 0 | `CITY_A / scenic_spot` | Dataset sampling | Recompute after city pseudonymization |
+| 18 | `semantic_text` | String | Yes | No | Deterministic derived | STA narrative generated from structured attributes using fixed rules and manually designed templates. | Must remain factually consistent with the structured fields | 0 | `POI_A is administratively affiliated with PROV_A, CITY_A, and DIST_A.` | Entity and relation extraction; KG construction | Regenerate after pseudonymization |
+| 19 | `source_file` | String | Yes | No | Ingestion metadata | Internal workbook from which the record was ingested. | Valid internal file name | 0 | `SOURCE_FILE_A.xlsx` | Provenance and audit | Replace with a generic source code or remove |
+| 20 | `source_sheet` | String | Yes | No | Ingestion metadata | Internal worksheet from which the record was ingested. | Valid internal worksheet name | 0 | `SHEET_A` | Provenance and audit | Replace with a generic sheet code or remove |
+| 21 | `selected_random_seed` | Integer | Yes | No | Reproducibility parameter | Fixed random seed used by the deterministic stratified sampling procedure. | Constant `20260608` for the documented selection | 0 | `20260608` | Sampling reproducibility | Release unchanged |
+
+## 5. Controlled Values for Public Artifacts
+
+### 5.1 Source POI Category
+
+| Code | Definition |
+|---|---|
+| `catering_service` | Catering and food-service source stratum |
+| `scenic_spot` | Scenic attraction source stratum |
+| `public_facility` | Public-facility source stratum |
+| `life_service` | Daily-life service source stratum |
+
+### 5.2 Administrative Granularity
+
+| Code | Definition |
+|---|---|
+| `building_or_house_number` | Building, unit, or house-number level |
+| `road_or_street` | Road or street level |
+| `district_or_general_poi` | District/county or general-POI level |
+| `poi_internal_point` | Internal point within a POI or scenic site |
+| `township_or_community` | Township, subdistrict, or community level |
+
+### 5.3 Query Difficulty
+
+| Code | Definition |
+|---|---|
+| `standard_address_retrieval` | Direct lookup from a sufficiently specified address |
+| `ambiguous_or_same_name` | Query involving a duplicate, alias, or ambiguous toponym |
+| `incomplete_or_nonstandard_expression` | Incomplete, colloquial, or non-standard address description |
+| `spatial_reasoning_query` | Query requiring multiple attributes or administrative/spatial reasoning |
+
+## 6. Anonymization Rules
+
+| Field group | Required action | Consistency requirement |
+|---|---|---|
+| Record identifiers | Create new public IDs. Do not expose or directly hash source-platform identifiers. | IDs must be unique and stable across released files. |
+| Toponyms | Replace real place names with stable POI codes such as `POI_A`. | Use the same code in the question, context, answer, and KG artifact. |
+| Administrative names | Replace real names with hierarchical codes such as `PROV_A`, `CITY_A`, and `DIST_A`. | Preserve the containment chain, for example `PROV_A > CITY_A > DIST_A`. |
+| Detailed addresses | Replace with `ADDRESS_A`-style placeholders or null. | Questions and reference answers must use the same placeholder. |
+| Coordinates | Remove and represent as null or `[REDACTED]`. | Omit or rewrite coordinate questions unless synthetic coordinates are explicitly identified as synthetic. |
+| POI taxonomy | Retain only coarse categories or replace detailed labels with codes. | Maintain the same category mapping across QA and KG artifacts. |
+| Derived annotations | Release normalized codes. | Recompute `sampling_stratum` after pseudonymizing city values. |
+| STA narrative | Regenerate from anonymized structured fields using the original deterministic templates. | Manually verify question-context-answer consistency. |
+| Provenance | Replace file and worksheet names with generic source codes or remove them. | Codes must not encode real city or category names. |
+| Random seed | Release unchanged. | Verify that the documented seed matches the released sampling pseudocode or script. |
+
+## 7. Fully Synthetic Example
+
+The following record demonstrates the structure only. It does not correspond to any real Amap record, toponym, address, or coordinate.
+
+```json
+{
+  "sample_id": "REC_000001",
+  "place_name": "POI_A",
+  "province": "PROV_A",
+  "city": "CITY_A",
+  "district": "DIST_A",
+  "detailed_address": "ADDRESS_A",
+  "longitude": null,
+  "latitude": null,
+  "poi_type": "CATEGORY_PATH_A",
+  "category_level_1": "CAT_L1_A",
+  "category_level_2": "CAT_L2_A",
+  "category_level_3": "CAT_L3_A",
+  "category_level_4": null,
+  "category_level_5": null,
+  "administrative_granularity": "road_or_street",
+  "query_difficulty": "spatial_reasoning_query",
+  "sampling_stratum": "CITY_A / scenic_spot",
+  "semantic_text": "POI_A is administratively affiliated with PROV_A, CITY_A, and DIST_A. Its detailed address is ADDRESS_A.",
+  "source_file": "SOURCE_FILE_A.xlsx",
+  "source_sheet": "SHEET_A",
+  "selected_random_seed": 20260608
+}
+```
+
+## 8. Reuse Notes
+
+1. This schema documents the experimental data structure but does not permit reconstruction of the licensed Amap records.
+2. Public QA pairs, prompt templates, KG schema, and evaluation scripts should use the same public field names and pseudonymization conventions defined here.
+3. Any public artifact containing derived text must be regenerated after anonymization rather than anonymized through isolated string replacement.
+4. Aggregate statistics should be checked against the final experimental dataset before release.
