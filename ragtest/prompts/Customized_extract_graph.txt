@@ -1,0 +1,208 @@
+-Goal-
+Given an AddressRAG semantic text chunk and a list of allowed entity types, extract the toponym-address entities and the explicit relationships among them. The result will be parsed by the GraphRAG entity-and-relationship extraction pipeline.
+
+-Allowed Entity Types-
+Use only entity types included in [{entity_types}]. Never invent an entity type outside this list.
+
+The recommended AddressRAG vocabulary is:
+- TOPONYM: a named POI, landmark, natural feature, building, facility, or other named geographic entity.
+- PROVINCE: a province-level administrative area.
+- CITY: a city-level administrative area.
+- DISTRICT: a district- or county-level administrative area.
+- TOWNSHIP_OR_SUBDISTRICT: a township, town, or subdistrict-level administrative area.
+- ROAD: a named road, street, avenue, or lane.
+- ADDRESS_ELEMENT: a house number, building, development zone, intersection, internal POI location, or other fine-grained address component that is not better represented by another allowed type.
+- COORDINATE: one complete WGS84 longitude-latitude pair. Treat the pair as one entity, not as separate longitude and latitude entities.
+- POI_CATEGORY: a category in the POI classification hierarchy.
+
+If a recommended type is not present in [{entity_types}], use the closest semantically valid allowed type. If no valid type is available, retain the information in the description of a related entity instead of creating an entity with an unsupported type. For example, if COORDINATE is not allowed, retain the WGS84 values in the TOPONYM description.
+
+-Extraction Rules-
+1. Extract entities.
+For each entity, provide:
+- entity_name: a stable canonical name. Preserve the source-language toponym or address string; trim surrounding whitespace; uppercase Latin-script names for consistent linking. Do not translate or paraphrase entity names.
+- entity_type: exactly one type from [{entity_types}].
+- entity_description: a concise English description containing only facts stated in the input. For a TOPONYM, retain available administrative affiliation, detailed address, WGS84 coordinates, and POI classification. For an administrative area, state its level and explicit parent. For a POI category, state its explicit position in the category hierarchy.
+
+Format each entity as:
+("entity"{tuple_delimiter}<entity_name>{tuple_delimiter}<entity_type>{tuple_delimiter}<entity_description>)
+
+2. Extract explicit relationships only between entities emitted in Step 1.
+Use the following direction and wording when supported by the input:
+- ADMINISTRATIVELY_BELONGS_TO: TOPONYM to its most specific stated administrative area, or a lower administrative area to its immediate parent.
+- LOCATED_AT: TOPONYM to a detailed ADDRESS_ELEMENT.
+- LOCATED_ON: TOPONYM or ADDRESS_ELEMENT to a ROAD.
+- HAS_COORDINATE: TOPONYM to its COORDINATE.
+- HAS_CATEGORY: TOPONYM to its most specific POI_CATEGORY.
+- SUBCATEGORY_OF: a more specific POI_CATEGORY to its immediate parent category.
+- NEAR: TOPONYM to an explicitly named nearby TOPONYM or landmark.
+- WITHIN: an internal POI or ADDRESS_ELEMENT to an explicitly named containing TOPONYM.
+
+Begin each relationship_description with the applicable uppercase relationship label followed by a colon, then explain the evidence in English. The relationship label remains part of the description because the GraphRAG tuple schema does not contain a separate relationship-type field.
+
+Assign relationship_strength on a 1-10 scale:
+- 10: a direct record-level fact, including explicit administrative affiliation, detailed address, or coordinate assignment.
+- 9: an explicit administrative or category hierarchy relation.
+- 8: an explicit containment, road, intersection, or proximity relation.
+- 6-7: another unambiguous relation directly supported by the text.
+- 1-5: too weak for this task; do not emit the relationship.
+
+Format each relationship as:
+("relationship"{tuple_delimiter}<source_entity>{tuple_delimiter}<target_entity>{tuple_delimiter}<relationship_description>{tuple_delimiter}<relationship_strength>)
+
+3. Apply the following quality constraints:
+- Use only evidence in the input text. Do not infer missing administrative levels, addresses, coordinates, categories, aliases, or spatial relations.
+- Treat null, nan, unknown, unavailable, and redacted values as missing. Do not create entities or relationships from them.
+- Do not create a relationship merely because two entities occur in the same text chunk.
+- Do not convert generic boilerplate, such as a statement that a POI forms part of a local service topology, into an edge unless a named target and a specific relation are stated.
+- Emit each entity once per input chunk. Merge multiple supported attributes into one description.
+- Emit one relationship tuple per distinct source-target pair. If several facts connect the same pair, combine them in one concise description.
+- Source and target names must exactly match entity_name values emitted in Step 1.
+- Do not place {tuple_delimiter}, {record_delimiter}, or {completion_delimiter} inside a field value.
+- Do not output empty records, duplicate delimiters, Markdown, headings, explanations, or any text outside the required records.
+
+4. Return the output in English as one sequence of entity and relationship records. Use {record_delimiter} exactly once between adjacent records. After the final record, output {completion_delimiter} without an additional record delimiter.
+
+######################
+-Examples-
+######################
+Example 1:
+Entity_types: TOPONYM,PROVINCE,CITY,DISTRICT,TOWNSHIP_OR_SUBDISTRICT,ROAD,ADDRESS_ELEMENT,COORDINATE,POI_CATEGORY
+Text:
+Toponym: POI_A. Administrative affiliation: PROV_A > CITY_A > DIST_A > TOWN_A. Detailed address: No. 12, ROAD_A. WGS84 coordinates: 110.0101 E, 25.0101 N. Classification: Scenic Spots > Parks and Squares > Botanical Garden.
+######################
+Output:
+("entity"{tuple_delimiter}POI_A{tuple_delimiter}TOPONYM{tuple_delimiter}POI_A is affiliated with TOWN_A in DIST_A, CITY_A, PROV_A; it is located at No. 12 on ROAD_A, has WGS84 coordinates 110.0101 E and 25.0101 N, and is classified as a Botanical Garden under Parks and Squares and Scenic Spots.)
+{record_delimiter}
+("entity"{tuple_delimiter}PROV_A{tuple_delimiter}PROVINCE{tuple_delimiter}PROV_A is the province-level administrative area stated for POI_A.)
+{record_delimiter}
+("entity"{tuple_delimiter}CITY_A{tuple_delimiter}CITY{tuple_delimiter}CITY_A is a city within PROV_A.)
+{record_delimiter}
+("entity"{tuple_delimiter}DIST_A{tuple_delimiter}DISTRICT{tuple_delimiter}DIST_A is a district within CITY_A.)
+{record_delimiter}
+("entity"{tuple_delimiter}TOWN_A{tuple_delimiter}TOWNSHIP_OR_SUBDISTRICT{tuple_delimiter}TOWN_A is the most specific administrative area stated for POI_A and is within DIST_A.)
+{record_delimiter}
+("entity"{tuple_delimiter}ROAD_A{tuple_delimiter}ROAD{tuple_delimiter}ROAD_A is the road in the detailed address of POI_A.)
+{record_delimiter}
+("entity"{tuple_delimiter}NO. 12, ROAD_A{tuple_delimiter}ADDRESS_ELEMENT{tuple_delimiter}No. 12 on ROAD_A is the detailed address element stated for POI_A.)
+{record_delimiter}
+("entity"{tuple_delimiter}COORD_110.0101E_25.0101N{tuple_delimiter}COORDINATE{tuple_delimiter}COORD_110.0101E_25.0101N represents the WGS84 coordinate pair 110.0101 E and 25.0101 N.)
+{record_delimiter}
+("entity"{tuple_delimiter}SCENIC SPOTS{tuple_delimiter}POI_CATEGORY{tuple_delimiter}Scenic Spots is the broad POI category stated for POI_A.)
+{record_delimiter}
+("entity"{tuple_delimiter}PARKS AND SQUARES{tuple_delimiter}POI_CATEGORY{tuple_delimiter}Parks and Squares is a POI category under Scenic Spots.)
+{record_delimiter}
+("entity"{tuple_delimiter}BOTANICAL GARDEN{tuple_delimiter}POI_CATEGORY{tuple_delimiter}Botanical Garden is the most specific POI category stated for POI_A.)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_A{tuple_delimiter}TOWN_A{tuple_delimiter}ADMINISTRATIVELY_BELONGS_TO: POI_A is explicitly affiliated with TOWN_A.{tuple_delimiter}10)
+{record_delimiter}
+("relationship"{tuple_delimiter}TOWN_A{tuple_delimiter}DIST_A{tuple_delimiter}ADMINISTRATIVELY_BELONGS_TO: TOWN_A is explicitly within DIST_A.{tuple_delimiter}9)
+{record_delimiter}
+("relationship"{tuple_delimiter}DIST_A{tuple_delimiter}CITY_A{tuple_delimiter}ADMINISTRATIVELY_BELONGS_TO: DIST_A is explicitly within CITY_A.{tuple_delimiter}9)
+{record_delimiter}
+("relationship"{tuple_delimiter}CITY_A{tuple_delimiter}PROV_A{tuple_delimiter}ADMINISTRATIVELY_BELONGS_TO: CITY_A is explicitly within PROV_A.{tuple_delimiter}9)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_A{tuple_delimiter}NO. 12, ROAD_A{tuple_delimiter}LOCATED_AT: POI_A is explicitly located at No. 12 on ROAD_A.{tuple_delimiter}10)
+{record_delimiter}
+("relationship"{tuple_delimiter}NO. 12, ROAD_A{tuple_delimiter}ROAD_A{tuple_delimiter}LOCATED_ON: The detailed address element No. 12 is explicitly on ROAD_A.{tuple_delimiter}8)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_A{tuple_delimiter}COORD_110.0101E_25.0101N{tuple_delimiter}HAS_COORDINATE: POI_A is explicitly assigned this WGS84 coordinate pair.{tuple_delimiter}10)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_A{tuple_delimiter}BOTANICAL GARDEN{tuple_delimiter}HAS_CATEGORY: Botanical Garden is the most specific category stated for POI_A.{tuple_delimiter}10)
+{record_delimiter}
+("relationship"{tuple_delimiter}BOTANICAL GARDEN{tuple_delimiter}PARKS AND SQUARES{tuple_delimiter}SUBCATEGORY_OF: Botanical Garden is explicitly nested under Parks and Squares.{tuple_delimiter}9)
+{record_delimiter}
+("relationship"{tuple_delimiter}PARKS AND SQUARES{tuple_delimiter}SCENIC SPOTS{tuple_delimiter}SUBCATEGORY_OF: Parks and Squares is explicitly nested under Scenic Spots.{tuple_delimiter}9)
+{completion_delimiter}
+
+######################
+Example 2:
+Entity_types: TOPONYM,PROVINCE,CITY,DISTRICT,COORDINATE,POI_CATEGORY,ADDRESS_ELEMENT
+Text:
+Toponym: POI_B. Administrative affiliation: PROV_A > CITY_A > DIST_B. Detailed address: unavailable. WGS84 coordinates: 110.0202 E, 25.0202 N. Classification: Life Services > Funeral Facilities > Cemetery.
+######################
+Output:
+("entity"{tuple_delimiter}POI_B{tuple_delimiter}TOPONYM{tuple_delimiter}POI_B is affiliated with DIST_B, CITY_A, PROV_A; its detailed address is unavailable, its WGS84 coordinates are 110.0202 E and 25.0202 N, and it is classified as a Cemetery under Funeral Facilities and Life Services.)
+{record_delimiter}
+("entity"{tuple_delimiter}PROV_A{tuple_delimiter}PROVINCE{tuple_delimiter}PROV_A is the province-level administrative area stated for POI_B.)
+{record_delimiter}
+("entity"{tuple_delimiter}CITY_A{tuple_delimiter}CITY{tuple_delimiter}CITY_A is a city within PROV_A.)
+{record_delimiter}
+("entity"{tuple_delimiter}DIST_B{tuple_delimiter}DISTRICT{tuple_delimiter}DIST_B is a district within CITY_A.)
+{record_delimiter}
+("entity"{tuple_delimiter}COORD_110.0202E_25.0202N{tuple_delimiter}COORDINATE{tuple_delimiter}COORD_110.0202E_25.0202N represents the WGS84 coordinate pair 110.0202 E and 25.0202 N.)
+{record_delimiter}
+("entity"{tuple_delimiter}LIFE SERVICES{tuple_delimiter}POI_CATEGORY{tuple_delimiter}Life Services is the broad POI category stated for POI_B.)
+{record_delimiter}
+("entity"{tuple_delimiter}FUNERAL FACILITIES{tuple_delimiter}POI_CATEGORY{tuple_delimiter}Funeral Facilities is a POI category under Life Services.)
+{record_delimiter}
+("entity"{tuple_delimiter}CEMETERY{tuple_delimiter}POI_CATEGORY{tuple_delimiter}Cemetery is the most specific POI category stated for POI_B.)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_B{tuple_delimiter}DIST_B{tuple_delimiter}ADMINISTRATIVELY_BELONGS_TO: POI_B is explicitly affiliated with DIST_B.{tuple_delimiter}10)
+{record_delimiter}
+("relationship"{tuple_delimiter}DIST_B{tuple_delimiter}CITY_A{tuple_delimiter}ADMINISTRATIVELY_BELONGS_TO: DIST_B is explicitly within CITY_A.{tuple_delimiter}9)
+{record_delimiter}
+("relationship"{tuple_delimiter}CITY_A{tuple_delimiter}PROV_A{tuple_delimiter}ADMINISTRATIVELY_BELONGS_TO: CITY_A is explicitly within PROV_A.{tuple_delimiter}9)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_B{tuple_delimiter}COORD_110.0202E_25.0202N{tuple_delimiter}HAS_COORDINATE: POI_B is explicitly assigned this WGS84 coordinate pair.{tuple_delimiter}10)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_B{tuple_delimiter}CEMETERY{tuple_delimiter}HAS_CATEGORY: Cemetery is the most specific category stated for POI_B.{tuple_delimiter}10)
+{record_delimiter}
+("relationship"{tuple_delimiter}CEMETERY{tuple_delimiter}FUNERAL FACILITIES{tuple_delimiter}SUBCATEGORY_OF: Cemetery is explicitly nested under Funeral Facilities.{tuple_delimiter}9)
+{record_delimiter}
+("relationship"{tuple_delimiter}FUNERAL FACILITIES{tuple_delimiter}LIFE SERVICES{tuple_delimiter}SUBCATEGORY_OF: Funeral Facilities is explicitly nested under Life Services.{tuple_delimiter}9)
+{completion_delimiter}
+
+######################
+Example 3:
+Entity_types: TOPONYM,PROVINCE,CITY,DISTRICT,ROAD,COORDINATE,POI_CATEGORY
+Text:
+Toponym: POI_C. Administrative affiliation: PROV_B > CITY_B > DIST_C. Detailed address: near LANDMARK_A on ROAD_B. WGS84 coordinates: 111.0303 E, 26.0303 N. Classification: Scenic Spots > Scenic Attraction > Memorial Hall.
+######################
+Output:
+("entity"{tuple_delimiter}POI_C{tuple_delimiter}TOPONYM{tuple_delimiter}POI_C is affiliated with DIST_C, CITY_B, PROV_B; it is near LANDMARK_A on ROAD_B, has WGS84 coordinates 111.0303 E and 26.0303 N, and is classified as a Memorial Hall under Scenic Attraction and Scenic Spots.)
+{record_delimiter}
+("entity"{tuple_delimiter}LANDMARK_A{tuple_delimiter}TOPONYM{tuple_delimiter}LANDMARK_A is the named landmark explicitly stated as being near POI_C.)
+{record_delimiter}
+("entity"{tuple_delimiter}PROV_B{tuple_delimiter}PROVINCE{tuple_delimiter}PROV_B is the province-level administrative area stated for POI_C.)
+{record_delimiter}
+("entity"{tuple_delimiter}CITY_B{tuple_delimiter}CITY{tuple_delimiter}CITY_B is a city within PROV_B.)
+{record_delimiter}
+("entity"{tuple_delimiter}DIST_C{tuple_delimiter}DISTRICT{tuple_delimiter}DIST_C is a district within CITY_B.)
+{record_delimiter}
+("entity"{tuple_delimiter}ROAD_B{tuple_delimiter}ROAD{tuple_delimiter}ROAD_B is the road stated in the detailed address of POI_C.)
+{record_delimiter}
+("entity"{tuple_delimiter}COORD_111.0303E_26.0303N{tuple_delimiter}COORDINATE{tuple_delimiter}COORD_111.0303E_26.0303N represents the WGS84 coordinate pair 111.0303 E and 26.0303 N.)
+{record_delimiter}
+("entity"{tuple_delimiter}SCENIC SPOTS{tuple_delimiter}POI_CATEGORY{tuple_delimiter}Scenic Spots is the broad POI category stated for POI_C.)
+{record_delimiter}
+("entity"{tuple_delimiter}SCENIC ATTRACTION{tuple_delimiter}POI_CATEGORY{tuple_delimiter}Scenic Attraction is a POI category under Scenic Spots.)
+{record_delimiter}
+("entity"{tuple_delimiter}MEMORIAL HALL{tuple_delimiter}POI_CATEGORY{tuple_delimiter}Memorial Hall is the most specific POI category stated for POI_C.)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_C{tuple_delimiter}DIST_C{tuple_delimiter}ADMINISTRATIVELY_BELONGS_TO: POI_C is explicitly affiliated with DIST_C.{tuple_delimiter}10)
+{record_delimiter}
+("relationship"{tuple_delimiter}DIST_C{tuple_delimiter}CITY_B{tuple_delimiter}ADMINISTRATIVELY_BELONGS_TO: DIST_C is explicitly within CITY_B.{tuple_delimiter}9)
+{record_delimiter}
+("relationship"{tuple_delimiter}CITY_B{tuple_delimiter}PROV_B{tuple_delimiter}ADMINISTRATIVELY_BELONGS_TO: CITY_B is explicitly within PROV_B.{tuple_delimiter}9)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_C{tuple_delimiter}ROAD_B{tuple_delimiter}LOCATED_ON: POI_C is explicitly stated to be on ROAD_B.{tuple_delimiter}8)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_C{tuple_delimiter}LANDMARK_A{tuple_delimiter}NEAR: POI_C is explicitly stated to be near LANDMARK_A.{tuple_delimiter}8)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_C{tuple_delimiter}COORD_111.0303E_26.0303N{tuple_delimiter}HAS_COORDINATE: POI_C is explicitly assigned this WGS84 coordinate pair.{tuple_delimiter}10)
+{record_delimiter}
+("relationship"{tuple_delimiter}POI_C{tuple_delimiter}MEMORIAL HALL{tuple_delimiter}HAS_CATEGORY: Memorial Hall is the most specific category stated for POI_C.{tuple_delimiter}10)
+{record_delimiter}
+("relationship"{tuple_delimiter}MEMORIAL HALL{tuple_delimiter}SCENIC ATTRACTION{tuple_delimiter}SUBCATEGORY_OF: Memorial Hall is explicitly nested under Scenic Attraction.{tuple_delimiter}9)
+{record_delimiter}
+("relationship"{tuple_delimiter}SCENIC ATTRACTION{tuple_delimiter}SCENIC SPOTS{tuple_delimiter}SUBCATEGORY_OF: Scenic Attraction is explicitly nested under Scenic Spots.{tuple_delimiter}9)
+{completion_delimiter}
+
+######################
+-Real Data-
+######################
+Entity_types: {entity_types}
+Text: {input_text}
+######################
+Output:
